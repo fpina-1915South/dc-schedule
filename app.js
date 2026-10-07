@@ -45,7 +45,7 @@ window.DCApp = (function () {
       trucks: { redhills: 25, loxley: 9, kernersville: 5, covington: 0 }[dc],
       hasDelivery: !cov,
       hasLinehaul: rh,
-      useNightLoad: rh,
+      useNightLoad: false,
       markets: rh
         ? [
             { n: "Jacksonville", buf: 10, local: false },
@@ -73,8 +73,8 @@ window.DCApp = (function () {
         P: { n: "Picking", s: 6, e: 14.5, g: "wh", d: "pick" },
         A: { n: "Prep and Assembly", s: 8, e: 16.5, g: "wh", d: "prep", fixed: 8 },
         V: { n: "Receiving", s: 10.5, e: 18, g: "wh", d: "inbound" },
-        D: { n: "Day", s: 6, e: 14.5, g: "wh", d: "" },
-        N: { n: "Night load", s: 14, e: 22.5, g: "wh", d: "load" },
+        D: { n: "Outbound, shop, inventory", s: 8, e: 16.5, g: "wh", d: "" },
+        N: { n: "Loading", s: 6, e: 14.5, g: "wh", d: "load" },
         S: { n: "Sat load", s: 7, e: 13, g: "wh", d: "" },
         R: { n: "Route (7a to completion)", s: 7, e: 17, g: "del" },
         L: { n: "Line-haul", s: 20, e: 30, g: "lh" }
@@ -559,6 +559,29 @@ window.DCApp = (function () {
           if (A.nd[i].linehaul - C2()[i].linehaul <= 0) continue;
           const p = pick(team.filter((x) => !x.leader && x.dept === "linehaul" && free(x, i, "L")));
           if (p) { put(p, i, "L"); progress = true; }
+        }
+      }
+    }
+    // Full time: everyone works 5 days. Fill each person's open work days with their usual shift
+    // (warehouse Mon to Fri, routes Tue to Sat, line-haul the nights before route days).
+    // Flex people go to the warehouse team with the biggest open need that day.
+    if (st.fullTime !== false) {
+      const codeForDept = (k) => { const own = deptTpls(st, k); return own.length ? own[0][0] : st.tpl.D ? "D" : Object.keys(st.tpl)[0]; };
+      const workDays = (p) => { const g = DEPT[p.dept] ? DEPT[p.dept].g : "wh"; if (g === "del") return st.routeDays; if (g === "lh") return st.routeDays.map((x, i) => (i < 6 ? st.routeDays[i + 1] : 0)); return st.whDays; };
+      for (const p of team) {
+        const wd = workDays(p), g = DEPT[p.dept] ? DEPT[p.dept].g : "wh";
+        for (let i = 0; i < 7 && days[p.id] < st.ot.maxDays; i++) {
+          if (!wd[i]) continue;
+          const rr = wk.sched[p.id];
+          if (cellOf(p.id, i).code || (rr && rr.lock && rr.lock[i])) continue;
+          let dept = p.dept;
+          if (dept === "flex") {
+            const ct = counts()[i]; let best = null, gap = 0;
+            for (const k of WH_NEED) { const open = A.nd[i][k] - ct[k]; if (open > gap) { gap = open; best = k; } }
+            if (best) dept = best;
+          }
+          const code = p.shift && shiftOf(p.shift) ? p.shift : g === "del" ? "R" : g === "lh" ? "L" : codeForDept(dept);
+          put(p, i, code, dept);
         }
       }
     }
@@ -1208,6 +1231,7 @@ window.DCApp = (function () {
         <div class="row" style="margin-top:10px">
           <label class="muted"><input type="checkbox" data-bool="useNightLoad" ${st.useNightLoad ? "checked" : ""} ${dis}> Loading works the night shift (N)</label>
           <label class="muted"><input type="checkbox" data-bool="leaderEveryShift" ${st.leaderEveryShift ? "checked" : ""} ${dis}> Require a leader on every warehouse shift</label>
+          <label class="muted"><input type="checkbox" data-bool="fullTime" ${st.fullTime !== false ? "checked" : ""} ${dis}> Everyone works 5 days (full time)</label>
           <label class="muted"><input type="checkbox" data-bool="hoursConfirmed" ${st.hoursConfirmed ? "checked" : ""} ${dis}> Shift hours and standards confirmed by the DC</label>
         </div>
       </div>
