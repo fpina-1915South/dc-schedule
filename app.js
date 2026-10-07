@@ -718,7 +718,7 @@ window.DCApp = (function () {
         <select id="wkSel" aria-label="Week">${weekOptions().map((w) => `<option value="${w.s}" ${w.s === S.week ? "selected" : ""}>${w.label}</option>`).join("")}</select>
         <div class="who">${S.ctx.demo ? '<span class="demo-tag">DEMO</span>' : ""}<span>${esc(u.email)}</span>${S.ctx.demo ? "" : '<button class="btn sm" id="outBtn">Sign out</button>'}</div>
       </div>
-      <nav class="tabs">${[["sched", "Schedule"], ["vol", "Volume & Need"], ["team", "Team"], ["set", "Settings"], ["all", "All DCs"]].map(([k, n]) => `<button data-tab="${k}" class="${S.tab === k ? "on" : ""}">${n}</button>`).join("")}</nav></div>
+      <nav class="tabs">${[["sched", "Schedule"], ["day", "Day view"], ["vol", "Volume & Need"], ["team", "Team"], ["set", "Settings"], ["all", "All DCs"]].map(([k, n]) => `<button data-tab="${k}" class="${S.tab === k ? "on" : ""}">${n}</button>`).join("")}</nav></div>
       <main id="main"></main>`;
     $("#dcSel").onchange = async (e) => { S.dc = e.target.value; await loadDC(); render(); };
     $("#wkSel").onchange = async (e) => { S.week = e.target.value; await loadWeek(); render(); };
@@ -727,7 +727,7 @@ window.DCApp = (function () {
   }
   function render() {
     const m = $("#main");
-    ({ sched: renderSched, vol: renderVol, team: renderTeam, set: renderSettings, all: renderAll })[S.tab](m);
+    ({ sched: renderSched, day: renderDay, vol: renderVol, team: renderTeam, set: renderSettings, all: renderAll })[S.tab](m);
   }
 
   /* ---------------- schedule tab ---------------- */
@@ -1018,6 +1018,69 @@ window.DCApp = (function () {
         clearTimeout(S.saveT); const ok = await syncField(true); await S.db.set(wkPath(S.dc, S.week), S.wk); close(); render(); toast(ok ? "Week posted. DC Field App updated." : "Week posted here only");
       };
     });
+  }
+
+  /* ---------------- day view: who is working a given day ---------------- */
+  function renderDay(m) {
+    const st = S.settings, A = analyze();
+    if (S.dayIdx == null) { const k = Math.round((parseISO(iso(new Date())) - parseISO(S.week)) / 864e5); S.dayIdx = k >= 0 && k < 7 ? k : 0; }
+    const i = S.dayIdx, n = A.nd[i], ct = A.ct[i];
+    const on = [], pto = [], groups = {};
+    for (const p of S.team.people) {
+      if (!p.active) continue;
+      const c = cellOf(p.id, i);
+      if (c.code === "PTO") { pto.push(p); continue; }
+      if (!working(c.code)) continue;
+      const sh = shiftOf(c.code); if (!sh) continue;
+      const r = S.wk.sched[p.id], lt = r && r.lunch ? r.lunch[i] : null;
+      const dept = c.dept || p.dept, g = DEPT[dept] ? DEPT[dept].g : "wh";
+      const key = p.leader ? "__leaders" : dept === "delivery" ? "delivery:" + (p.market || "") : dept;
+      const row = { p, sh, lt, dept, g, moved: !!c.dept && c.dept !== p.dept };
+      on.push(row); (groups[key] = groups[key] || []).push(row);
+    }
+    const order = ["__leaders"].concat(DEPTS.map((d) => d.k));
+    const keys = Object.keys(groups).sort((a, b) => {
+      const ka = a.split(":")[0], kb = b.split(":")[0];
+      return order.indexOf(ka) - order.indexOf(kb) || st.markets.findIndex((x) => x.n === a.split(":")[1]) - st.markets.findIndex((x) => x.n === b.split(":")[1]);
+    });
+    const label = (k) => k === "__leaders" ? "Leaders on shift" : k.startsWith("delivery:") ? "Delivery · " + (k.split(":")[1] || "Leader") : DEPT[k] ? DEPT[k].n : k;
+    const needFor = (k) => {
+      if (k === "__leaders") return null;
+      if (k.startsWith("delivery:")) { const mk = k.split(":")[1]; return { need: n.delivery[mk] || 0, have: ct.delivery[mk] || 0 }; }
+      if (k === "linehaul") return { need: n.linehaul, have: ct.linehaul };
+      if (k === "shop") return { need: n.shop, have: ct.shop };
+      if (WH_NEED.includes(k)) return { need: n[k], have: ct[k] };
+      return null;
+    };
+    // people on the floor by hour (warehouse and shop, not counting anyone at lunch)
+    const floor = on.filter((x) => x.g === "wh" || x.g === "shop");
+    let h0 = 24, h1 = 0; for (const x of floor) { h0 = Math.min(h0, Math.floor(x.sh.s)); h1 = Math.max(h1, Math.ceil(x.sh.e)); }
+    const hours = []; for (let h = h0; h < h1; h++) {
+      const t = h + 0.5, L = st.lunch.mins / 60;
+      hours.push({ h, c: floor.filter((x) => x.sh.s <= t && t < x.sh.e && !(x.lt != null && x.lt <= t && t < x.lt + L)).length });
+    }
+    const mx = Math.max(1, ...hours.map((x) => x.c));
+    const dCount = on.filter((x) => x.g === "del").length, lCount = on.filter((x) => x.g === "lh").length, ldr = on.filter((x) => x.p.leader).length;
+    m.innerHTML = `
+      <div class="card"><div class="row"><div><h3>${DAYS[i]} ${md(dayDate(i))} · ${esc(dcName(S.dc))}</h3><div class="sub">${S.wk.posted ? "From the posted schedule." : "Draft. Not posted yet."}</div></div></div>
+        <div class="chips">${DAYS.map((d, k) => `<button class="chip ${k === i ? "on" : ""}" data-dday="${k}">${d} ${md(dayDate(k))}</button>`).join("")}</div></div>
+      <div class="strip">
+        <div class="stat"><div class="k">On shift</div><div class="v">${on.length}</div><div class="d">${floor.length} warehouse and shop</div></div>
+        ${st.hasDelivery ? `<div class="stat"><div class="k">Delivery crew</div><div class="v">${dCount}</div><div class="d">${A.vol[i].routesTotal} routes planned</div></div>` : ""}
+        ${st.hasLinehaul ? `<div class="stat"><div class="k">Line-haul tonight</div><div class="v">${lCount}</div><div class="d">need ${n.linehaul}</div></div>` : ""}
+        <div class="stat"><div class="k">Leaders on</div><div class="v">${ldr}</div></div>
+        <div class="stat ${pto.length ? "warn" : ""}"><div class="k">PTO</div><div class="v">${pto.length}</div><div class="d">${pto.map((p) => esc(p.name)).slice(0, 3).join(", ")}${pto.length > 3 ? " +" + (pto.length - 3) : ""}</div></div>
+      </div>
+      ${hours.length ? `<div class="card"><h3>On the floor by hour</h3><div class="sub">Warehouse and shop, not counting anyone at lunch.</div>
+        <div class="scroll" style="border:0"><div style="display:flex;align-items:flex-end;gap:4px;height:120px;min-width:${hours.length * 34}px;padding-top:16px">
+        ${hours.map((x) => `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end"><span style="font-size:11px;font-weight:700;color:var(--ink)">${x.c}</span><div style="width:100%;max-width:26px;background:var(--blue);border-radius:4px 4px 0 0;height:${Math.round((x.c / mx) * 80)}px"></div><span class="muted" style="font-size:10px">${fmtT(x.h).replace(":00", "")}</span></div>`).join("")}
+        </div></div></div>` : ""}
+      ${keys.length ? keys.map((k) => { const nf = needFor(k); const list = groups[k].sort((a, b) => a.sh.s - b.sh.s || a.p.name.localeCompare(b.p.name));
+        return `<div class="card"><div class="row"><h3>${esc(label(k))} <span class="muted">(${list.length})</span></h3><span class="spacer"></span>${nf ? `<span class="pill ${nf.have < nf.need ? "bad" : nf.have > nf.need ? "warn" : "ok"}">${nf.have} scheduled · need ${nf.need}</span>` : ""}</div>
+        <div class="scroll" style="margin-top:8px"><table><thead><tr><th>Name</th><th>Shift</th><th>Lunch</th><th>Note</th></tr></thead><tbody>
+        ${list.map((x) => `<tr><td><span class="pname">${esc(x.p.name)}</span>${x.p.leader ? '<span class="ldr">LDR</span>' : ""}<div class="pmeta">${esc(x.p.role || x.p.pos || "")}</div></td><td style="white-space:nowrap">${fmtT(x.sh.s)} to ${fmtT(x.sh.e)}</td><td style="white-space:nowrap">${x.lt != null ? fmtT(x.lt) : x.g === "del" || x.g === "lh" ? '<span class="muted">on the road</span>' : '<span class="muted">none</span>'}</td><td class="pmeta">${x.moved ? "Moved from " + esc(DEPT[x.p.dept] ? DEPT[x.p.dept].n : x.p.dept) : k === "__leaders" ? esc(DEPT[x.dept] ? DEPT[x.dept].n : x.dept) : ""}</td></tr>`).join("")}
+        </tbody></table></div></div>`; }).join("") : `<div class="card">No one is scheduled ${DAYS[i]}. Build the week on the Schedule tab.</div>`}`;
+    m.querySelectorAll("[data-dday]").forEach((b) => (b.onclick = () => { S.dayIdx = +b.dataset.dday; renderDay(m); }));
   }
 
   /* ---------------- volume tab ---------------- */
