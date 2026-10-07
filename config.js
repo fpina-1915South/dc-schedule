@@ -1,7 +1,7 @@
 /* 1915 South DC Smart Scheduler: config
    Bump `version` every time app.js changes so browsers load the new copy. */
 window.DC_CONFIG = {
-  version: "1.7.1",
+  version: "1.7.2",
 
   // Paste the firebaseConfig from the DC Field App (project field-leader-1915).
   // Leave apiKey empty to run in DEMO mode (data saved only in this browser).
@@ -25,7 +25,7 @@ window.DC_CONFIG = {
 
   // During testing any approved user can post any DC. Set false to limit posting
   // to admins plus the leaderEmails saved on each DC's Team tab.
-  openPosting: true,
+  openPosting: false,
 
   appUrl: "https://fpina-1915south.github.io/dc-schedule/"
 };
