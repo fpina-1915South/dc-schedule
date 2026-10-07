@@ -1,7 +1,7 @@
 /* 1915 South DC Smart Scheduler: config
    Bump `version` every time app.js changes so browsers load the new copy. */
 window.DC_CONFIG = {
-  version: "1.7.2",
+  version: "1.8.0",
 
   // Paste the firebaseConfig from the DC Field App (project field-leader-1915).
   // Leave apiKey empty to run in DEMO mode (data saved only in this browser).
