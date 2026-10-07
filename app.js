@@ -597,7 +597,7 @@ window.DCApp = (function () {
     if (!S.team) {
       const seed = ((window.DC_SEED_ROSTER || {})[dc] || []).map((p) => Object.assign({}, p));
       S.team = { dc, people: seed, leaderEmails: [], source: "Paylocity Active Roster (Oct 2026)" };
-      await db.set("dcTeams/" + dc, S.team);
+      try { await db.set("dcTeams/" + dc, S.team); } catch (e) {}
     }
     await loadWeek();
   }
@@ -716,7 +716,7 @@ window.DCApp = (function () {
     const posted = S.wk.posted, changed = S.wk.changedSincePost;
     const bar = posted
       ? `<div class="posted-bar ${changed ? "changed" : ""}">${changed ? "Posted, then changed. Re-post so the team sees the latest." : "Posted"} ${S.wk.postedAt ? "· " + new Date(S.wk.postedAt).toLocaleString() : ""} ${S.wk.postedBy ? "by " + esc(S.wk.postedBy) : ""}${S.wk.postReason ? ` · Note: ${esc(S.wk.postReason)}` : ""}${S.wk.fieldSyncAt ? ` · In DC Field App` : ""}<span class="spacer"></span>${canPost() ? `<button class="btn sm ${changed ? "accent" : ""}" id="postBtn">${changed ? "Re-post week" : "Post again"}</button>` : ""}</div>`
-      : `<div class="posted-bar draft">Draft. Not posted yet.<span class="spacer"></span>${canPost() ? `<button class="btn primary sm" id="postBtn">Post week</button>` : `<span class="muted">Only this DC's leaders can post</span>`}</div>`;
+      : `<div class="posted-bar draft">Draft. Not posted yet.<span class="spacer"></span>${canPost() ? `<button class="btn primary sm" id="postBtn">Post week</button>` : `<span class="muted">View only. Managers and directors build and post.</span>`}</div>`;
     const hrsCls = (h) => (h > st.ot.red ? "bad" : h >= st.ot.amber ? "warn" : "");
     const flagIds = new Set(A.flags.filter((f) => f.who && f.lvl === "bad").map((f) => f.who));
     const needCell = (need, have) => {
@@ -1082,8 +1082,11 @@ window.DCApp = (function () {
       <div class="card"><div class="row"><div><h3>${esc(dcName(S.dc))} team · ${t.people.filter((p) => p.active).length} active</h3>
         <div class="sub">From ${esc(t.source || "manual entry")}. Set each person's home team. Flex warehouse people can be moved to any warehouse team day by day on the schedule.</div></div>
         <span class="spacer"></span>${ed ? `<label class="btn">Upload Paylocity roster<input type="file" id="rosIn" accept=".xlsx,.xls,.csv" hidden></label><button class="btn" id="addP">Add person</button>` : ""}${isAdmin() ? `<label class="btn" title="One-time setup: loads all 4 DCs from the starting roster file">Import starting roster<input type="file" id="seedIn" accept=".json" hidden></label>` : ""}</div>
-        <label class="muted" style="display:block;max-width:640px">Leader emails that can sign in and post this DC (comma separated, @1915south.com). Adding someone here is how they get in. No email is sent.
+        <label class="muted" style="display:block;max-width:640px">Managers and directors: can build, change and post this DC's schedule (comma separated, @1915south.com)
           <input class="inp" id="ldrEm" value="${esc((t.leaderEmails || []).join(", "))}" ${isAdmin() ? "" : "disabled"}></label>
+        <label class="muted" style="display:block;max-width:640px;margin-top:8px">Supervisors and others: view only
+          <input class="inp" id="viewEm" value="${esc((t.viewEmails || []).join(", "))}" ${isAdmin() ? "" : "disabled"}></label>
+        <div class="muted" style="margin-top:4px">Adding an email here is how someone gets in. No email is sent.</div>
       </div>
       <div class="scroll"><table>
         <thead><tr><th class="sticky-col">Name</th><th>Paylocity position</th><th>Home team</th>${st.hasDelivery ? "<th>Market</th><th>Role</th>" : ""}<th>Usual shift</th><th>Leader</th><th title="Salaried leaders are not flagged for OT">Salaried</th><th>Active</th></tr></thead>
@@ -1104,20 +1107,31 @@ window.DCApp = (function () {
       if (f === "dept" && p.dept === "delivery" && !p.market) p.market = (st.markets.find((x) => x.local) || st.markets[0]).n;
       await saveTeam(); renderTeam(m);
     }));
-    // Leader emails also go to dcAccess/{email}, the sign-in list the Firestore rules check (no emails sent)
-    const le = $("#ldrEm"); if (le) le.onchange = async () => {
-      const before = (t.leaderEmails || []).slice();
-      t.leaderEmails = le.value.split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter((x) => /@1915south\.com$/.test(x));
-      le.value = t.leaderEmails.join(", ");
+    // Access list: managers/directors can build and post, everyone else on the list views. Saved to dcAccess/{email},
+    // which the Firestore rules check (no emails sent). Keyed by DC slug and DC number.
+    const saveAccess = async () => {
+      const parse = (el) => el.value.split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter((x) => /@1915south\.com$/.test(x));
+      const before = [].concat(t.leaderEmails || [], t.viewEmails || []);
+      t.leaderEmails = parse($("#ldrEm")); t.viewEmails = parse($("#viewEm")).filter((x) => !t.leaderEmails.includes(x));
+      $("#ldrEm").value = t.leaderEmails.join(", "); $("#viewEm").value = t.viewEmails.join(", ");
+      const num = DC_NUM[S.dc];
       try {
-        for (const em of t.leaderEmails) await S.db.merge("dcAccess/" + em, { email: em, dcs: { [S.dc]: true }, addedBy: S.ctx.user.email, addedAt: new Date().toISOString() });
-        for (const em of before.filter((x) => !t.leaderEmails.includes(x))) {
-          const cur = (await S.db.get("dcAccess/" + em)) || {}; const dcs = Object.assign({}, cur.dcs); delete dcs[S.dc];
+        for (const [list, role] of [[t.leaderEmails, "manager"], [t.viewEmails, "view"]]) {
+          for (const em of list) {
+            const cur = (await S.db.get("dcAccess/" + em)) || {};
+            const dcs = Object.assign({}, cur.dcs, { [S.dc]: role, [num]: role });
+            await S.db.set("dcAccess/" + em, { email: em, dcs, addedBy: S.ctx.user.email, addedAt: new Date().toISOString() });
+          }
+        }
+        for (const em of before.filter((x) => !t.leaderEmails.includes(x) && !t.viewEmails.includes(x))) {
+          const cur = (await S.db.get("dcAccess/" + em)) || {}; const dcs = Object.assign({}, cur.dcs); delete dcs[S.dc]; delete dcs[num];
           if (Object.keys(dcs).length) await S.db.set("dcAccess/" + em, Object.assign(cur, { dcs })); else await S.db.del("dcAccess/" + em);
         }
         await saveTeam(); toast("Saved. They can sign in now.");
       } catch (e) { toast("Could not save access: " + e.message); }
     };
+    const le = $("#ldrEm"); if (le) le.onchange = saveAccess;
+    const ve = $("#viewEm"); if (ve) ve.onchange = saveAccess;
     const ap = $("#addP"); if (ap) ap.onclick = () => modal(`<h3>Add person</h3><div class="form"><label>Name<input id="nName"></label><label>Home team<select id="nDept">${deptOpts("flex")}</select></label><label><input type="checkbox" id="nLdr" style="display:inline;width:auto"> Leader</label></div><div class="row" style="margin-top:12px"><span class="spacer"></span><button class="btn" data-x>Cancel</button><button class="btn primary" id="nGo">Add</button></div>`, (el, close) => {
       el.querySelector("[data-x]").onclick = close;
       el.querySelector("#nGo").onclick = async () => { const n = el.querySelector("#nName").value.trim(); if (!n) return; const dept = el.querySelector("#nDept").value; t.people.push({ id: S.dc.slice(0, 2) + Date.now().toString(36), name: n, pos: "Added in app", dept, market: dept === "delivery" ? (st.markets.find((x) => x.local) || st.markets[0]).n : "", role: "", leader: el.querySelector("#nLdr").checked, active: true }); await saveTeam(); close(); renderTeam(m); };
