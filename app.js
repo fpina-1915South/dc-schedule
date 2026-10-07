@@ -658,10 +658,17 @@ window.DCApp = (function () {
     S.wk.updatedAt = new Date().toISOString(); S.wk.updatedBy = S.ctx.user.email;
     if (S.wk.posted) S.wk.changedSincePost = true;
     clearTimeout(S.saveT);
-    S.saveT = setTimeout(async () => {
+    S.pendingSave = async () => {
       try { if (!S.wk.posted) await syncField(false); await S.db.set(wkPath(S.dc, S.week), S.wk); }
       catch (e) { toast("Save failed: " + e.message); }
-    }, 600);
+    };
+    S.saveT = setTimeout(() => { S.saveT = null; const f = S.pendingSave; S.pendingSave = null; if (f) f(); }, 600);
+  }
+  // Save any pending edit now, before switching DC or week (so a quick switch never drops a change)
+  async function flushSave() {
+    if (S.saveT) { clearTimeout(S.saveT); S.saveT = null; }
+    const f = S.pendingSave; S.pendingSave = null;
+    if (f) await f();
   }
   async function saveTeam() { await S.db.set("dcTeams/" + S.dc, S.team); }
   async function saveSettings() { await S.db.set("dcSettings/" + S.dc, S.settings); }
@@ -720,8 +727,8 @@ window.DCApp = (function () {
       </div>
       <nav class="tabs">${[["sched", "Schedule"], ["day", "Day view"], ["vol", "Volume & Need"], ["team", "Team"], ["set", "Settings"], ["all", "All DCs"]].map(([k, n]) => `<button data-tab="${k}" class="${S.tab === k ? "on" : ""}">${n}</button>`).join("")}</nav></div>
       <main id="main"></main>`;
-    $("#dcSel").onchange = async (e) => { S.dc = e.target.value; await loadDC(); render(); };
-    $("#wkSel").onchange = async (e) => { S.week = e.target.value; await loadWeek(); render(); };
+    $("#dcSel").onchange = async (e) => { await flushSave(); S.dc = e.target.value; await loadDC(); render(); };
+    $("#wkSel").onchange = async (e) => { await flushSave(); S.week = e.target.value; await loadWeek(); render(); };
     document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; document.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("on", x === b)); render(); }));
     const ob = $("#outBtn"); if (ob) ob.onclick = () => window.DCSignOut && window.DCSignOut();
   }
@@ -1350,6 +1357,7 @@ window.DCApp = (function () {
 
   /* ---------------- all DCs ---------------- */
   async function renderAll(m) {
+    await flushSave();
     m.innerHTML = `<div class="card">Loading all four DCs…</div>`;
     const rows = [];
     for (const d of DCS) {
@@ -1391,7 +1399,7 @@ window.DCApp = (function () {
         <div class="scroll"><table><thead><tr><th class="sticky-col">Market</th><th>DC</th><th class="num">Buffer</th><th class="num">Needed</th><th class="num">Scheduled</th><th class="num">Gap</th></tr></thead><tbody>
         ${rows.filter((r) => r.st.hasDelivery).flatMap((r) => r.st.markets.map((mk) => { const n = r.A.nd.reduce((a, x) => a + (x.delivery[mk.n] || 0), 0), c = r.A.ct.reduce((a, x) => a + (x.delivery[mk.n] || 0), 0); return `<tr><td class="sticky-col">${esc(mk.n)}</td><td>${r.d.n}</td><td class="num">${mk.buf}%</td><td class="num">${n}</td><td class="num">${c}</td><td class="num"><span class="hrs ${c < n ? "bad" : ""}">${c - n}</span></td></tr>`; })).join("")}
         </tbody></table></div></div>`;
-    m.querySelectorAll("[data-go]").forEach((a) => (a.onclick = async (e) => { e.preventDefault(); S.dc = a.dataset.go; S.tab = "sched"; await loadDC(); shell(); render(); }));
+    m.querySelectorAll("[data-go]").forEach((a) => (a.onclick = async (e) => { e.preventDefault(); await flushSave(); S.dc = a.dataset.go; S.tab = "sched"; await loadDC(); shell(); render(); }));
   }
 
   /* ---------------- start ---------------- */
