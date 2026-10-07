@@ -92,6 +92,7 @@ window.DCApp = (function () {
       ot: { amber: 38, red: 40, dayMax: 11, maxDays: 5 },
       blackout: { from: "2026-11-22", to: "2026-12-05" },
       leaderEveryShift: true,
+      driverDays: 4, // drivers, helpers and line-haul: 4 x 10-hour days
       hoursConfirmed: false,
       settingsVersion: 3,
       // Typical day: used when a week has no volume entered and no 4-week history. Routes from Package.ai Sep 1 to Oct 5
@@ -562,7 +563,8 @@ window.DCApp = (function () {
         }
       }
     }
-    // Full time: everyone works 5 days. Fill each person's open work days with their usual shift
+    // Full time: warehouse and shop work 5 days. Drivers, helpers and line-haul work driverDays (4 x 10-hour days),
+    // with the day off rotated to the day their market needs least. Fill open work days with the usual shift
     // (warehouse Mon to Fri, routes Tue to Sat, line-haul the nights before route days).
     // Flex people go to the warehouse team with the biggest open need that day.
     if (st.fullTime !== false) {
@@ -570,10 +572,18 @@ window.DCApp = (function () {
       const workDays = (p) => { const g = DEPT[p.dept] ? DEPT[p.dept].g : "wh"; if (g === "del") return st.routeDays; if (g === "lh") return st.routeDays.map((x, i) => (i < 6 ? st.routeDays[i + 1] : 0)); return st.whDays; };
       for (const p of team) {
         const wd = workDays(p), g = DEPT[p.dept] ? DEPT[p.dept].g : "wh";
-        for (let i = 0; i < 7 && days[p.id] < st.ot.maxDays; i++) {
-          if (!wd[i]) continue;
-          const rr = wk.sched[p.id];
-          if (cellOf(p.id, i).code || (rr && rr.lock && rr.lock[i])) continue;
+        const drv = g === "del" || g === "lh", target = drv ? (+st.driverDays || 4) : st.ot.maxDays;
+        while (days[p.id] < target) {
+          const rr = wk.sched[p.id], cands = [];
+          for (let j = 0; j < 7; j++) if (wd[j] && !cellOf(p.id, j).code && !(rr && rr.lock && rr.lock[j])) cands.push(j);
+          if (!cands.length) break;
+          let i = cands[0];
+          if (drv) {
+            const ct = counts(), mk = p.market || (st.markets[0] || {}).n;
+            const open = (j) => (g === "del" ? (A.nd[j].delivery[mk] || 0) - (ct[j].delivery[mk] || 0) : A.nd[j].linehaul - ct[j].linehaul);
+            const on = (j) => (g === "del" ? ct[j].delivery[mk] || 0 : ct[j].linehaul);
+            i = cands.sort((a, b) => open(b) - open(a) || on(a) - on(b))[0];
+          }
           let dept = p.dept;
           if (dept === "flex") {
             const ct = counts()[i]; let best = null, gap = 0;
@@ -1252,7 +1262,7 @@ window.DCApp = (function () {
       <div class="card"><h3>Lunch rules</h3><div class="sub">Lunches are staggered automatically every time the schedule changes. Set one by hand on a day cell to lock it.</div>
         <div class="form">${n("lunch.mins", "Lunch length (min)", "unpaid")}${n("lunch.minShift", "Lunch on shifts of (hrs) or more")}${n("lunch.early", "Earliest start (hrs into shift)")}${n("lunch.late", "Latest start (hrs into shift)")}${n("lunch.share", "Max % of a position at lunch at once")}${n("lunch.leaderCap", "Leaders at lunch at once")}</div></div>
       <div class="card"><h3>Overtime and coverage rules</h3>
-        <div class="form">${n("ot.amber", "Amber at (weekly hrs)")}${n("ot.red", "Red over (weekly hrs)")}${n("ot.dayMax", "Flag a day over (hrs)")}${n("ot.maxDays", "Max days per week", "5 = 2 days off")}
+        <div class="form">${n("ot.amber", "Amber at (weekly hrs)")}${n("ot.red", "Red over (weekly hrs)")}${n("ot.dayMax", "Flag a day over (hrs)")}${n("ot.maxDays", "Max days per week", "5 = 2 days off")}${n("driverDays", "Driver and line-haul days per week", "4 x 10-hour routes")}
           <label>Black Friday PTO blackout from<input type="date" data-path="blackout.from" value="${st.blackout.from}" ${dis}></label>
           <label>to<input type="date" data-path="blackout.to" value="${st.blackout.to}" ${dis}></label></div></div>
       ${st.hasDelivery ? `<div class="card"><h3>Delivery markets and callout buffer</h3><div class="sub">Extra crew scheduled on top of routes x crew to absorb callouts.</div>
