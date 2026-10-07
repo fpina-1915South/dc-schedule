@@ -1,0 +1,32 @@
+DC Smart Scheduler: Firestore rules to ADD to field-leader-1915
+================================================================
+
+Paste this block right after the line
+    match /databases/{database}/documents {
+in the field-leader-1915 rules, then Publish. It does not change any existing rule.
+Function names start with dcsch so they can't clash with the Field Leader or DC Field App rules.
+No email is ever needed to sign in: access comes from dcAccess (Team tab leader emails), the Field Leader users list, or ovApproved.
+If the DC Field App task also adds a /dcschedule block, that's fine: Firestore allows a request if either block allows it.
+
+    // ---- DC Smart Scheduler (dc-schedule app) ----
+    function dcschEmail() { return request.auth.token.email.lower(); }
+    function dcschIn() {
+      return request.auth != null && dcschEmail().matches('.*@1915south[.]com$') && (
+        exists(/databases/$(database)/documents/dcAccess/$(dcschEmail()))
+        || exists(/databases/$(database)/documents/users/$(dcschEmail()))
+        || exists(/databases/$(database)/documents/ovApproved/$(dcschEmail()))
+        || dcschEmail() in ['fpina@1915south.com', 'acrawford@1915south.com']);
+    }
+    function dcschAdmin() {
+      return dcschIn() && (dcschEmail() in ['fpina@1915south.com', 'acrawford@1915south.com']
+        || (exists(/databases/$(database)/documents/users/$(dcschEmail()))
+            && get(/databases/$(database)/documents/users/$(dcschEmail())).data.role == 'admin'));
+    }
+    match /dcSettings/{dc} { allow read: if dcschIn(); allow write: if dcschAdmin(); }
+    match /dcTeams/{dc} { allow read, write: if dcschIn(); }
+    match /dcWeeks/{id} { allow read, write: if dcschIn(); }
+    match /dcschedule/{id} { allow read, write: if dcschIn(); }
+    match /dcAccess/{email} { allow read: if request.auth != null && dcschEmail() == email; allow write: if dcschAdmin(); }
+    // ---- end DC Smart Scheduler ----
+
+Note: open each of the 4 DCs once as Frank or Andrew after go-live so each DC's settings doc is created.

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DC Smart Scheduler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="auth" class="auth">
+  <div class="auth-card">
+    <div class="auth-brand"><span class="logo">1915 SOUTH</span><span>DC Smart Scheduler</span></div>
+    <form id="authForm">
+      <h2 id="authTitle">Sign in</h2>
+      <label>Work email<input id="authEmail" type="email" autocomplete="username" required></label>
+      <label id="pwRow">Password<input id="authPw" type="password" autocomplete="current-password"></label>
+      <label id="pw2Row" style="display:none">Confirm password<input id="authPw2" type="password" autocomplete="new-password"></label>
+      <button id="authGo" class="btn primary" type="submit">Sign in</button>
+      <div id="authMsg" class="auth-msg"></div>
+      <div class="auth-links">
+        <a href="#" id="toNew">Create your account</a>
+        <a href="#" id="toReset">Forgot password</a>
+        <a href="#" id="toIn" style="display:none">Back to sign in</a>
+      </div>
+    </form>
+    <div id="authConfirm" style="display:none">
+      <h2>Almost in</h2>
+      <p>Your account is set up for <b id="authConfirmTo"></b>, but it isn't on the DC Scheduler list yet.</p>
+      <p>Ask Frank or Andrew to add your email on the Team tab. Then tap Check again. No email is sent.</p>
+      <button id="authConfirmed" class="btn primary">Check again</button>
+      <button id="authOut" class="btn ghost">Use a different email</button>
+    </div>
+  </div>
+</div>
+<div id="app"></div>
+<script src="config.js"></script>
+<script src="dc-roster-seed.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>
