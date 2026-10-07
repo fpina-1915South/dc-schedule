@@ -58,7 +58,7 @@ window.DCApp = (function () {
           ]
         : [{ n: cov ? "3PL" : "Local", buf: 0, local: true }],
       std: {
-        stopsPerRoute: 12, crew: 2, piecesPerStop: 6,
+        stopsPerRoute: 12, crew: 2, piecesPerStop: { redhills: 2.7, loxley: 2.9, kernersville: 2.8, covington: 3.1 }[dc], // items per stop, Package.ai Sep 1 to Oct 5
         inboundHrsPerTrailer: 8, pickPPH: 18, loadPPH: 22,
         routesPerOutbound: 8, returnsPerHr: 6, shopPerHr: 1.5,
         boxesPerRun: 2, prodHrs: 8, inventoryFixed: 1
@@ -93,7 +93,15 @@ window.DCApp = (function () {
       blackout: { from: "2026-11-22", to: "2026-12-05" },
       leaderEveryShift: true,
       hoursConfirmed: false,
-      settingsVersion: 2
+      settingsVersion: 3,
+      // Typical day: used when a week has no volume entered and no 4-week history. Routes from Package.ai Sep 1 to Oct 5
+      // (stops credited to driver and helper, so halved, at 12 stops per route). Trailers, returns and repairs are estimates.
+      typical: {
+        redhills: { routes: { Jacksonville: 7, Brunswick: 1, Columbus: 2, Macon: 1, Dothan: 1, "Panama City": 1, Thomasville: 3 }, inbound: 8, returns: 18, shop: 10 },
+        loxley: { routes: { Local: 9 }, inbound: 3, returns: 6, shop: 4 },
+        kernersville: { routes: { Local: 5 }, inbound: 2, returns: 4, shop: 3 },
+        covington: { routes: { "3PL": 5 }, inbound: 5, returns: 8, shop: 9 }
+      }[dc]
     };
   }
 
@@ -205,6 +213,7 @@ window.DCApp = (function () {
       for (const m of st.markets) {
         let x = num(v.routes && v.routes[m.n]), src = "entered";
         if (x == null) { x = wk === S.wk ? histAvg(null, i, m.n) : null; src = "avg"; }
+        if (x == null && st.typical && st.typical.routes && st.routeDays[i]) { x = num(st.typical.routes[m.n]); src = "typical"; }
         if (x == null) { x = 0; src = "none"; }
         if (!st.routeDays[i] && src !== "entered") { x = 0; src = "none"; }
         x = src === "avg" ? Math.round(x) : x;
@@ -216,6 +225,7 @@ window.DCApp = (function () {
       for (const k of ["inbound", "returns", "shop"]) {
         let x = num(v[k]), src = "entered";
         if (x == null) { x = wk === S.wk ? histAvg(k, i) : null; src = "avg"; }
+        if (x == null && st.typical && st.whDays[i]) { x = num(st.typical[k]); src = "typical"; }
         if (x == null) { x = 0; src = "none"; }
         if (!st.whDays[i] && src !== "entered") { x = 0; src = "none"; }
         o[k] = src === "avg" ? Math.round(x) : x; o.src[k] = src;
@@ -593,6 +603,7 @@ window.DCApp = (function () {
     S.settings = (await db.get("dcSettings/" + dc)) || null;
     if (!S.settings) { S.settings = defaultSettings(dc); if (S.ctx.role === "admin") await db.set("dcSettings/" + dc, S.settings); }
     S.settings = Object.assign(defaultSettings(dc), S.settings); S.settings.lunch = Object.assign({}, defaultSettings(dc).lunch, S.settings.lunch || {});
+    if ((S.settings.settingsVersion || 0) < 3) { const d = defaultSettings(dc); S.settings.std.piecesPerStop = d.std.piecesPerStop; S.settings.typical = d.typical; S.settings.settingsVersion = 3; if (S.ctx.role === "admin") { try { await db.set("dcSettings/" + dc, S.settings); } catch (e) {} } }
     S.team = (await db.get("dcTeams/" + dc)) || null;
     if (!S.team) {
       const seed = ((window.DC_SEED_ROSTER || {})[dc] || []).map((p) => Object.assign({}, p));
@@ -698,6 +709,11 @@ window.DCApp = (function () {
   }
   function groupKey(p) { return p.dept === "delivery" ? "delivery:" + (p.market || "") : p.dept; }
   function renderSched(m) {
+    // First open of an empty current or future week: build it so managers start from a full draft
+    if (canPost() && S.week >= iso(weekStart(new Date())) && !S.wk.posted && !Object.keys(S.wk.sched || {}).length && !S.wk.autoBuilt) {
+      S.wk.autoBuilt = true; const x = smartBuild(); touch();
+      setTimeout(() => toast(`Smart build filled ${x.added} shifts. Adjust what you need, then post.`), 300);
+    }
     const st = S.settings, A = analyze(), dcn = dcName(S.dc);
     const people = S.team.people.filter((p) => p.active);
     const fl = S.filter;
@@ -975,7 +991,7 @@ window.DCApp = (function () {
   function renderVol(m) {
     const st = S.settings, vol = effVolume(), nd = needs(st, vol), ct = counts();
     const v = S.wk.volume;
-    const srcLbl = { entered: "", avg: "4-wk avg", auto: "auto", none: "" };
+    const srcLbl = { entered: "", avg: "4-wk avg", auto: "auto", typical: "typical", none: "" };
     const inp = (i, key, val, src, market) => `<td class="num"><input type="number" min="0" step="1" data-i="${i}" data-k="${key}" ${market ? `data-m="${esc(market)}"` : ""} value="${src === "entered" ? val : ""}" placeholder="${src === "entered" ? "" : val}" class="${src === "entered" ? "" : "auto"}"><span class="src">${srcLbl[src] || ""}</span></td>`;
     let vrows = "";
     for (const mk of st.markets) vrows += `<tr><td class="sticky-col">Routes · ${esc(mk.n)}${mk.buf ? ` <span class="pill warn">+${mk.buf}% buffer</span>` : ""}</td>${vol.map((o, i) => inp(i, "routes", o.routes[mk.n], o.src["r:" + mk.n], mk.n)).join("")}</tr>`;
@@ -1207,6 +1223,8 @@ window.DCApp = (function () {
           ${st.hasLinehaul ? n("std.boxesPerRun", "Boxes per line-haul run") : ""}${n("std.prodHrs", "Productive hrs per shift")}${n("std.inventoryFixed", "Inventory auditors per warehouse day")}
           ${st.hasDelivery ? n("trucks", "Trucks in fleet") : ""}
         </div></div>
+      <div class="card"><h3>Typical day</h3><div class="sub">Used when a week has no volume entered and no 4-week history yet, so Smart build has something to work from. Routes started from Package.ai (Sep 1 to Oct 5). Trailers, returns and repairs are estimates. Put in your real numbers.</div>
+        <div class="form">${st.markets.map((x) => `<label>Routes · ${esc(x.n)}<input type="number" min="0" data-typ="r:${esc(x.n)}" value="${(st.typical && st.typical.routes && st.typical.routes[x.n]) || 0}" ${dis}></label>`).join("")}${["inbound", "returns", "shop"].map((k) => `<label>${{ inbound: "Inbound trailers", returns: "Returns", shop: "Shop repairs" }[k]}<input type="number" min="0" data-typ="${k}" value="${(st.typical && st.typical[k]) || 0}" ${dis}></label>`).join("")}</div></div>
       <div class="card"><h3>Lunch rules</h3><div class="sub">Lunches are staggered automatically every time the schedule changes. Set one by hand on a day cell to lock it.</div>
         <div class="form">${n("lunch.mins", "Lunch length (min)", "unpaid")}${n("lunch.minShift", "Lunch on shifts of (hrs) or more")}${n("lunch.early", "Earliest start (hrs into shift)")}${n("lunch.late", "Latest start (hrs into shift)")}${n("lunch.share", "Max % of a position at lunch at once")}${n("lunch.leaderCap", "Leaders at lunch at once")}</div></div>
       <div class="card"><h3>Overtime and coverage rules</h3>
@@ -1229,6 +1247,7 @@ window.DCApp = (function () {
     };
     m.querySelectorAll("[data-bool]").forEach((el) => (el.onchange = () => { st[el.dataset.bool] = el.checked; save(); }));
     m.querySelectorAll("[data-arr]").forEach((el) => (el.onchange = () => { st[el.dataset.arr][+el.dataset.i] = el.checked ? 1 : 0; save(); }));
+    m.querySelectorAll("[data-typ]").forEach((el) => (el.onchange = () => { st.typical = st.typical || { routes: {} }; st.typical.routes = st.typical.routes || {}; const k = el.dataset.typ; if (k.startsWith("r:")) st.typical.routes[k.slice(2)] = +el.value; else st.typical[k] = +el.value; save(); }));
     m.querySelectorAll("[data-mk]").forEach((el) => (el.onchange = () => { const x = st.markets[+el.dataset.mk]; x[el.dataset.f] = el.type === "checkbox" ? el.checked : +el.value; save(); }));
   }
 
