@@ -165,7 +165,7 @@ window.DCApp = (function () {
     role = /Driver/.test(p) ? "Driver" : /Helper/.test(p) ? "Helper" : "";
     if (dc !== "redhills" && p === "DeliveryWhse") role = "Driver";
     const supv = g("supervisor"), empKey = Object.keys(row).find((k) => /employee ?(id|#|number)|^emp|^id$/i.test(k));
-    return { name: first + " " + last, rosterName: last + ", " + first, pdept: dep, sup: supv.split(",")[0].trim(), emp: empKey ? String(row[empKey]).trim() : "", pos: p, dept, market, role, leader, active: true, loc };
+    return { name: first + " " + last, rosterName: last + ", " + first, pdept: dep, sup: supv.split(",")[0].trim(), emp: empKey ? String(row[empKey]).trim() : "", pos: p, dept, market, role, leader, salaried: leader && /Manager|Director|Assistant D$|WarehouseManagement/.test(p), active: true, loc };
   }
   function locToDC(loc) {
     loc = String(loc || "").toLowerCase();
